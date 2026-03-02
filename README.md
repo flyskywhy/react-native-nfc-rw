@@ -60,13 +60,14 @@ export default class App extends Component {
       alertNfcOther: this.alertNfcOther,
       onDiscoverTag: this.onDiscoverTag,
       alertIosMessage: 'Let your phone tap the device to add', // for system NFC alert modal on iOS
-      alertAndroidOpen: () => this.setState({modalNfc: true}), // for custom NFC alert modal on Android, cause system NFC alert modal can't show on my Android phone
-      alertAndroidClose: destroyNfc, // default is destroyNfc
+      alertAndroidOpen: () => this.setState({modalNfc: true}), // for custom NFC alert modal on Android, cause system NFC alert modal can't show on my Android phone,  // default is () => {}
+      alertAndroidClose: this.dismissNfcModal, // default is destroyNfc
     });
   };
 
   // will only be invoked on Android
   dismissNfcModal = () => {
+    destroyNfc();
     this.setState({
       modalNfc: false,
     });
