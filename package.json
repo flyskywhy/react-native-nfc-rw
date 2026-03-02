@@ -1,6 +1,6 @@
 {
   "name": "react-native-nfc-rw",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A wrapper to easy to use react-native-nfc-rw.",
   "main": "index.js",
   "repository": {
