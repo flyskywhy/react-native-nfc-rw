@@ -30,7 +30,6 @@ import NfcManager, {NfcEvents, NfcTech, Ndef} from 'react-native-nfc-manager';
 const NFC_V_CMD_FLAG_BROADCAST = 0x02; // 广播
 const NFC_V_CMD_FLAG_ADDRESSED = 0x22; // 指定标签的 UID
 const NFC_V_CMD_FLAG_IS_ADDRESSED = 0x20;
-const nfcVCmdFlag = NFC_V_CMD_FLAG_ADDRESSED;
 
 function isAddressed(cmdFlag) {
   return (
@@ -121,9 +120,7 @@ async function initNfc({
           const tag = await NfcManager.getTag();
           // console.log('tag found on iOS', tag);
           // tag.id read on iOS is inverted against on Android
-          tag.id = byteArray2HexString(
-            hexString2ByteArray(tag.id).reverse(),
-          );
+          tag.id = byteArray2HexString(hexString2ByteArray(tag.id).reverse());
           // console.log('tag found', tag);
 
           await onDiscoverTag(tag);
@@ -270,6 +267,7 @@ async function readRegNfcVTag({
 // automatically use one or more single block or multiple blocks read commands to read
 async function readNfcVTagCanMultiple({
   uid,
+  cmdFlag = NFC_V_CMD_FLAG_ADDRESSED,
   startBlock = 0,
   bytesLength = 4, // 从 startBlock 开始读取多少个字节，默认为 4 也就是一个 block 的大小
   forceReadSingleBlock = false, // 当读取很多字节时也 4 个字节 4 个字节的读，速度最慢，兼容性好
@@ -281,9 +279,9 @@ async function readNfcVTagCanMultiple({
     // 使用一条单块读取命令单次读取，只能读取 4 字节
     return (
       await NfcManager.nfcVHandler.transceive(
-        nfcVCmdFlag === NFC_V_CMD_FLAG_ADDRESSED
-          ? [nfcVCmdFlag, nfcVCmd.READ_SINGLE_BLOCK, ...uid, startBlock]
-          : [nfcVCmdFlag, nfcVCmd.READ_SINGLE_BLOCK, startBlock],
+        isAddressed(cmdFlag)
+          ? [cmdFlag, nfcVCmd.READ_SINGLE_BLOCK, ...uid, startBlock]
+          : [cmdFlag, nfcVCmd.READ_SINGLE_BLOCK, startBlock],
       )
     ).slice(1, bytesLength + 1);
   } else if (bytesLength <= readMultipleMaxBytes && bytesLength % 4 === 0) {
@@ -293,20 +291,15 @@ async function readNfcVTagCanMultiple({
 
     return (
       await NfcManager.nfcVHandler.transceive(
-        nfcVCmdFlag === NFC_V_CMD_FLAG_ADDRESSED
+        isAddressed(cmdFlag)
           ? [
-              nfcVCmdFlag,
+              cmdFlag,
               nfcVCmd.READ_MULTIPLE_BLOCKS,
               ...uid,
               startBlock,
               blocks.length,
             ]
-          : [
-              nfcVCmdFlag,
-              nfcVCmd.READ_MULTIPLE_BLOCKS,
-              startBlock,
-              blocks.length,
-            ],
+          : [cmdFlag, nfcVCmd.READ_MULTIPLE_BLOCKS, startBlock, blocks.length],
       )
     ).slice(1, bytesLength + 1);
   } else {
@@ -319,9 +312,9 @@ async function readNfcVTagCanMultiple({
       let bytesRead = [];
       for (let i = 0; i < blocks.length; i++) {
         const block = await NfcManager.nfcVHandler.transceive(
-          nfcVCmdFlag === NFC_V_CMD_FLAG_ADDRESSED
-            ? [nfcVCmdFlag, nfcVCmd.READ_SINGLE_BLOCK, ...uid, startBlock + i]
-            : [nfcVCmdFlag, nfcVCmd.READ_SINGLE_BLOCK, startBlock + i],
+          isAddressed(cmdFlag)
+            ? [cmdFlag, nfcVCmd.READ_SINGLE_BLOCK, ...uid, startBlock + i]
+            : [cmdFlag, nfcVCmd.READ_SINGLE_BLOCK, startBlock + i],
         );
         bytesRead.push(...block.slice(1, block.length + 1));
       }
@@ -348,16 +341,16 @@ async function readNfcVTagCanMultiple({
           blocksCount++;
         }
         const block = await NfcManager.nfcVHandler.transceive(
-          nfcVCmdFlag === NFC_V_CMD_FLAG_ADDRESSED
+          isAddressed(cmdFlag)
             ? [
-                nfcVCmdFlag,
+                cmdFlag,
                 nfcVCmd.READ_MULTIPLE_BLOCKS,
                 ...uid,
                 startBlock + i * readMultipleMaxBlocks,
                 blocksCount,
               ]
             : [
-                nfcVCmdFlag,
+                cmdFlag,
                 nfcVCmd.READ_MULTIPLE_BLOCKS,
                 startBlock + i * readMultipleMaxBlocks,
                 blocksCount,
@@ -377,6 +370,7 @@ async function readNfcVTagCanMultiple({
 
 async function readNfcVTag({
   tag,
+  cmdFlag = NFC_V_CMD_FLAG_ADDRESSED,
   startBlock = 0,
   bytesLength = 4, // how many bytes to read from startBlock ，default is 4 as one block size
   forceReadSingleBlock = false, // if true, 4 by 4 bytes when read many bytes，slowest but more compatible
@@ -395,6 +389,7 @@ async function readNfcVTag({
     // 自动使用若干条单块或多块读取命令读取数据
     const bytesRead = await readNfcVTagCanMultiple({
       uid,
+      cmdFlag,
       startBlock,
       bytesLength,
       forceReadSingleBlock,
@@ -420,6 +415,7 @@ async function readNfcVTag({
 
 async function writeNfcVTag({
   tag,
+  cmdFlag = NFC_V_CMD_FLAG_ADDRESSED,
   startBlock = 1,
   dataToWrite = [], // 从 startBlock 开始写入的字节数组，如果字节总数不能被 4 整除，则会补 0x00
 }) {
@@ -444,28 +440,23 @@ async function writeNfcVTag({
 
     for (let i = 0; i < blocks.length; i++) {
       const response = await NfcManager.nfcVHandler.transceive(
-        nfcVCmdFlag === NFC_V_CMD_FLAG_ADDRESSED
+        isAddressed(cmdFlag)
           ? [
-              nfcVCmdFlag,
+              cmdFlag,
               nfcVCmd.WRITE_SINGLE_BLOCK,
               ...uid,
               startBlock + i,
               ...blocks[i],
             ]
-          : [
-              nfcVCmdFlag,
-              nfcVCmd.WRITE_SINGLE_BLOCK,
-              startBlock + i,
-              ...blocks[i],
-            ],
+          : [cmdFlag, nfcVCmd.WRITE_SINGLE_BLOCK, startBlock + i, ...blocks[i]],
       );
       // console.log('write success, response:', response); // success is [0]
     }
     // if NFC tag hardware not supprt WRITE_MULTIPLE_BLOCKS , use above instead of below
     // const response = await NfcManager.nfcVHandler.transceive(
-    //   nfcVCmdFlag === NFC_V_CMD_FLAG_ADDRESSED
+    //   isAddressed(cmdFlag)
     //     ? [
-    //         nfcVCmdFlag,
+    //         cmdFlag,
     //         nfcVCmd.WRITE_MULTIPLE_BLOCKS,
     //         ...uid,
     //         startBlock,
@@ -473,7 +464,7 @@ async function writeNfcVTag({
     //         ...dataToWrite,
     //       ]
     //     : [
-    //         nfcVCmdFlag,
+    //         cmdFlag,
     //         nfcVCmd.WRITE_MULTIPLE_BLOCKS,
     //         startBlock,
     //         blocks.length,
@@ -483,6 +474,7 @@ async function writeNfcVTag({
 
     verifyRead = await readNfcVTagCanMultiple({
       uid,
+      cmdFlag,
       startBlock,
       bytesLength: dataToWrite.length,
     });
@@ -537,7 +529,7 @@ async function readNdefFormatableTag() {
       NfcManager.cancelTechnologyRequest().catch(() => 0);
     }
   }
-};
+}
 
 async function readNdefData() {
   try {
@@ -566,7 +558,7 @@ async function readNdefData() {
     console.error('NDEF data read failed:', error);
     Alert.alert('Error', 'NDEF data read failed: ' + error.message);
   }
-};
+}
 
 async function formatAndWriteNdefData() {
   try {
@@ -664,9 +656,10 @@ async function formatAndWriteNdefData() {
     console.error('NDEF format or data write failed:', error);
     Alert.alert('Error', 'NDEF format or data write failed: ' + error.message);
   }
-};
+}
 
 export {
+  NFC_V_CMD_FLAG_IS_ADDRESSED,
   chunk,
   padHexString,
   hexString2ByteArray,
@@ -679,4 +672,4 @@ export {
   readNfcVTagCanMultiple,
   readNfcVTag,
   writeNfcVTag,
-}
+};
