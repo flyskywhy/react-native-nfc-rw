@@ -31,6 +31,8 @@ import {Button, Modal, StyleSheet, Text, View} from 'react-native';
 import {
   destroyNfc,
   initNfc,
+  setSelectNfcVTag,
+  readRegNfcVTag,
   readNfcVTag,
   writeNfcVTag,
 } from 'react-native-nfc-rw';

@@ -28,8 +28,15 @@ import NfcManager, {NfcEvents, NfcTech, Ndef} from 'react-native-nfc-manager';
 //
 // but 复旦微电子的人 said this AI answer is wrong, should be
 const NFC_V_CMD_FLAG_BROADCAST = 0x02; // 广播
-const NFC_V_CMD_FLAG_SELECT = 0x22; // 指定标签的 UID
-const nfcVCmdFlag = NFC_V_CMD_FLAG_SELECT;
+const NFC_V_CMD_FLAG_ADDRESSED = 0x22; // 指定标签的 UID
+const NFC_V_CMD_FLAG_IS_ADDRESSED = 0x20;
+const nfcVCmdFlag = NFC_V_CMD_FLAG_ADDRESSED;
+
+function isAddressed(cmdFlag) {
+  return (
+    (cmdFlag & NFC_V_CMD_FLAG_IS_ADDRESSED) === NFC_V_CMD_FLAG_IS_ADDRESSED
+  );
+}
 
 const nfcVCmd = {
   READ_SINGLE_BLOCK: 0x20, // 读取单个块的数据
@@ -37,6 +44,8 @@ const nfcVCmd = {
   LOCK_BLOCK: 0x22, // 锁定块
   READ_MULTIPLE_BLOCKS: 0x23, // 读取多个块的数据
   WRITE_MULTIPLE_BLOCKS: 0x24, // 写入多个块的数据（需标签支持）
+  SET_SELECT: 0x25, // 手机可以以此来表示霸占了 NFC 的读写，这样硬件管脚相连的固件就知道此时不能读写了，手机离开后能自动取消霸占的
+  READ_REG: 0xae, // 读取寄存器
 };
 
 function chunk(array, size = 1) {
@@ -164,6 +173,100 @@ function destroyNfc() {
   }
 }
 
+async function setSelectNfcVTag({tag, cmdFlag = NFC_V_CMD_FLAG_ADDRESSED}) {
+  let isSet = false;
+
+  try {
+    if (Platform.OS === 'android') {
+      // NfcManager.requestTechnology(NfcTech.NfcV, {
+      //   alertMessage: '请将 NFC-V 标签靠近设备',
+      // });
+      // 我的 Android 手机上面的代码会导致第一次触碰会死等在这里，然后第二次触碰 NFC 才能读取数据，因此使用下面的代码
+      await NfcManager.connect([NfcTech.NfcV]);
+    }
+
+    const uid = hexString2ByteArray(tag.id);
+    let bytes = await NfcManager.nfcVHandler.transceive([
+      cmdFlag | NFC_V_CMD_FLAG_IS_ADDRESSED,
+      nfcVCmd.SET_SELECT,
+      ...uid,
+    ]);
+
+    const response = bytes.shift();
+    if (response) {
+      console.error('setSelectNfcVTag error:', [response, ...bytes]);
+    } else {
+      isSet = true;
+    }
+  } catch (error) {
+    console.error('setSelectNfcVTag failed:', error);
+  } finally {
+    if (Platform.OS === 'android') {
+      // 5. 释放 NFC 资源
+      NfcManager.cancelTechnologyRequest().catch(err => console.error(err));
+      // 如果想要能再次碰触后读取的，就要用上面，否则用下面的
+      // NfcManager.close();
+    }
+  }
+
+  return isSet;
+}
+
+// read a reg in NfcV Tag
+async function readRegNfcVTag({
+  regAddress,
+  tag,
+  cmdFlag = NFC_V_CMD_FLAG_ADDRESSED,
+  icMfgCode, // if not set, will be uid[6] automatically
+}) {
+  let bytes; // may return bytes of 4 regs start from regAddress
+
+  try {
+    if (Platform.OS === 'android') {
+      // NfcManager.requestTechnology(NfcTech.NfcV, {
+      //   alertMessage: '请将 NFC-V 标签靠近设备',
+      // });
+      // 我的 Android 手机上面的代码会导致第一次触碰会死等在这里，然后第二次触碰 NFC 才能读取数据，因此使用下面的代码
+      await NfcManager.connect([NfcTech.NfcV]);
+    }
+
+    if (tag && isAddressed(cmdFlag)) {
+      const uid = hexString2ByteArray(tag.id);
+      bytes = await NfcManager.nfcVHandler.transceive([
+        cmdFlag,
+        nfcVCmd.READ_REG,
+        icMfgCode || uid[6],
+        ...uid,
+        regAddress,
+      ]);
+    } else {
+      bytes = await NfcManager.nfcVHandler.transceive([
+        cmdFlag,
+        nfcVCmd.READ_REG,
+        icMfgCode,
+        regAddress,
+      ]);
+    }
+
+    const response = bytes.shift();
+    if (response) {
+      console.error('readRegNfcVTag error:', [response, ...bytes]);
+      return;
+    } else {
+      return bytes; // 这里 return 了，后面的 finally 仍然会被执行的
+    }
+  } catch (error) {
+    console.error('readRegNfcVTag failed:', error);
+  } finally {
+    if (Platform.OS === 'android') {
+      // 5. 释放 NFC 资源
+      NfcManager.cancelTechnologyRequest().catch(err => console.error(err));
+      // 如果想要能再次碰触后读取的，就要用上面，否则用下面的
+      // NfcManager.close();
+    }
+  }
+}
+
 // automatically use one or more single block or multiple blocks read commands to read
 async function readNfcVTagCanMultiple({
   uid,
@@ -178,7 +281,7 @@ async function readNfcVTagCanMultiple({
     // 使用一条单块读取命令单次读取，只能读取 4 字节
     return (
       await NfcManager.nfcVHandler.transceive(
-        nfcVCmdFlag === NFC_V_CMD_FLAG_SELECT
+        nfcVCmdFlag === NFC_V_CMD_FLAG_ADDRESSED
           ? [nfcVCmdFlag, nfcVCmd.READ_SINGLE_BLOCK, ...uid, startBlock]
           : [nfcVCmdFlag, nfcVCmd.READ_SINGLE_BLOCK, startBlock],
       )
@@ -190,7 +293,7 @@ async function readNfcVTagCanMultiple({
 
     return (
       await NfcManager.nfcVHandler.transceive(
-        nfcVCmdFlag === NFC_V_CMD_FLAG_SELECT
+        nfcVCmdFlag === NFC_V_CMD_FLAG_ADDRESSED
           ? [
               nfcVCmdFlag,
               nfcVCmd.READ_MULTIPLE_BLOCKS,
@@ -216,7 +319,7 @@ async function readNfcVTagCanMultiple({
       let bytesRead = [];
       for (let i = 0; i < blocks.length; i++) {
         const block = await NfcManager.nfcVHandler.transceive(
-          nfcVCmdFlag === NFC_V_CMD_FLAG_SELECT
+          nfcVCmdFlag === NFC_V_CMD_FLAG_ADDRESSED
             ? [nfcVCmdFlag, nfcVCmd.READ_SINGLE_BLOCK, ...uid, startBlock + i]
             : [nfcVCmdFlag, nfcVCmd.READ_SINGLE_BLOCK, startBlock + i],
         );
@@ -245,7 +348,7 @@ async function readNfcVTagCanMultiple({
           blocksCount++;
         }
         const block = await NfcManager.nfcVHandler.transceive(
-          nfcVCmdFlag === NFC_V_CMD_FLAG_SELECT
+          nfcVCmdFlag === NFC_V_CMD_FLAG_ADDRESSED
             ? [
                 nfcVCmdFlag,
                 nfcVCmd.READ_MULTIPLE_BLOCKS,
@@ -341,7 +444,7 @@ async function writeNfcVTag({
 
     for (let i = 0; i < blocks.length; i++) {
       const response = await NfcManager.nfcVHandler.transceive(
-        nfcVCmdFlag === NFC_V_CMD_FLAG_SELECT
+        nfcVCmdFlag === NFC_V_CMD_FLAG_ADDRESSED
           ? [
               nfcVCmdFlag,
               nfcVCmd.WRITE_SINGLE_BLOCK,
@@ -360,7 +463,7 @@ async function writeNfcVTag({
     }
     // if NFC tag hardware not supprt WRITE_MULTIPLE_BLOCKS , use above instead of below
     // const response = await NfcManager.nfcVHandler.transceive(
-    //   nfcVCmdFlag === NFC_V_CMD_FLAG_SELECT
+    //   nfcVCmdFlag === NFC_V_CMD_FLAG_ADDRESSED
     //     ? [
     //         nfcVCmdFlag,
     //         nfcVCmd.WRITE_MULTIPLE_BLOCKS,
@@ -571,6 +674,8 @@ export {
   arraysEqual,
   initNfc,
   destroyNfc,
+  setSelectNfcVTag,
+  readRegNfcVTag,
   readNfcVTagCanMultiple,
   readNfcVTag,
   writeNfcVTag,
