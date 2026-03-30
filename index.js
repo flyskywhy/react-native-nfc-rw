@@ -38,13 +38,14 @@ function isAddressed(cmdFlag) {
 }
 
 const nfcVCmd = {
-  READ_SINGLE_BLOCK: 0x20, // 读取单个块的数据
-  WRITE_SINGLE_BLOCK: 0x21, // 写入单个块的数据（4 字节）
+  READ_SINGLE_BLOCK: 0x20, // read 1 block (4 bytes)
+  WRITE_SINGLE_BLOCK: 0x21, // write 1 block (4 bytes)
   LOCK_BLOCK: 0x22, // 锁定块
   READ_MULTIPLE_BLOCKS: 0x23, // 读取多个块的数据
   WRITE_MULTIPLE_BLOCKS: 0x24, // 写入多个块的数据（需标签支持）
   SET_SELECT: 0x25, // 手机可以以此来表示霸占了 NFC 的读写，这样硬件管脚相连的固件就知道此时不能读写了，手机离开后能自动取消霸占的
   READ_REG: 0xae, // 读取寄存器
+  WRITE_4_BLOCKS: 0xd6, // write 4 blocks (16 bytes), need tag support
 };
 
 function chunk(array, size = 1) {
@@ -416,19 +417,12 @@ async function readNfcVTag({
 async function writeNfcVTag({
   tag,
   cmdFlag = NFC_V_CMD_FLAG_ADDRESSED,
-  startBlock = 1,
-  dataToWrite = [], // 从 startBlock 开始写入的字节数组，如果字节总数不能被 4 整除，则会补 0x00
+  startBlock = 1, // if forceWriteSingleBlock if false, need startBlock % 4 === 0
+  dataToWrite = [], // the bytes to write from startBlock, if dataToWrite.length % 4 !== 0 , will padding 0x00
+  forceWriteSingleBlock = true, // if false, 16 bytes each write; if true, 4 bytes each write，slowest but more compatible
+  icMfgCode, // if not set, will be uid[6] automatically
 }) {
-  const blocks = chunk(dataToWrite, 4);
-  if (blocks.length) {
-    const lastBlock = blocks[blocks.length - 1];
-    if (lastBlock.length !== 4) {
-      lastBlock.push(...new Array(4 - lastBlock.length).fill(0));
-    }
-  } else {
-    return true;
-  }
-
+  // console.log('dataToWrite.length: ', dataToWrite.length)
   let verifyRead = [];
 
   try {
@@ -438,39 +432,107 @@ async function writeNfcVTag({
 
     const uid = hexString2ByteArray(tag.id);
 
-    for (let i = 0; i < blocks.length; i++) {
-      const response = await NfcManager.nfcVHandler.transceive(
-        isAddressed(cmdFlag)
-          ? [
-              cmdFlag,
-              nfcVCmd.WRITE_SINGLE_BLOCK,
-              ...uid,
-              startBlock + i,
-              ...blocks[i],
-            ]
-          : [cmdFlag, nfcVCmd.WRITE_SINGLE_BLOCK, startBlock + i, ...blocks[i]],
-      );
-      // console.log('write success, response:', response); // success is [0]
+    if (
+      dataToWrite.length <= 4 ||
+      forceWriteSingleBlock ||
+      startBlock % 4 !== 0
+    ) {
+      const blocks = chunk(dataToWrite, 4);
+      if (blocks.length) {
+        const lastBlock = blocks[blocks.length - 1];
+        if (lastBlock.length !== 4) {
+          lastBlock.push(...new Array(4 - lastBlock.length).fill(0));
+        }
+      } else {
+        return true;
+      }
+
+      // console.time('WRITE_SINGLE_BLOCK');
+      for (let i = 0; i < blocks.length; i++) {
+        const response = await NfcManager.nfcVHandler.transceive(
+          isAddressed(cmdFlag)
+            ? [
+                cmdFlag,
+                nfcVCmd.WRITE_SINGLE_BLOCK,
+                ...uid,
+                startBlock + i,
+                ...blocks[i],
+              ]
+            : [
+                cmdFlag,
+                nfcVCmd.WRITE_SINGLE_BLOCK,
+                startBlock + i,
+                ...blocks[i],
+              ],
+        );
+        // console.log('write single block success, response:', response); // success is [0]
+      }
+      // console.timeEnd('WRITE_SINGLE_BLOCK');
+      //  4 bytes: 14.114990 ms
+      // 38 bytes: 202.185059 ms
+
+      // if NFC tag hardware not supprt WRITE_MULTIPLE_BLOCKS , use above instead of below
+      // const response = await NfcManager.nfcVHandler.transceive(
+      //   isAddressed(cmdFlag)
+      //     ? [
+      //         cmdFlag,
+      //         nfcVCmd.WRITE_MULTIPLE_BLOCKS,
+      //         ...uid,
+      //         startBlock,
+      //         blocks.length,
+      //         ...dataToWrite,
+      //       ]
+      //     : [
+      //         cmdFlag,
+      //         nfcVCmd.WRITE_MULTIPLE_BLOCKS,
+      //         startBlock,
+      //         blocks.length,
+      //         ...dataToWrite,
+      //       ];
+      // );
+    } else {
+      const bytes16Blocks = chunk(dataToWrite, 16);
+      if (bytes16Blocks.length) {
+        const lastBytes16Block = bytes16Blocks[bytes16Blocks.length - 1];
+        if (lastBytes16Block.length !== 16) {
+          lastBytes16Block.push(
+            ...new Array(16 - lastBytes16Block.length).fill(0),
+          );
+        }
+      } else {
+        return true;
+      }
+
+      const dummy = [19, 49];
+
+      // console.time('WRITE_4_BLOCKS');
+      for (let i = 0; i < bytes16Blocks.length; i++) {
+        const response = await NfcManager.nfcVHandler.transceive(
+          isAddressed(cmdFlag)
+            ? [
+                cmdFlag,
+                nfcVCmd.WRITE_4_BLOCKS,
+                icMfgCode || uid[6],
+                ...uid,
+                startBlock + i * 4,
+                ...dummy,
+                ...bytes16Blocks[i],
+              ]
+            : [
+                cmdFlag,
+                nfcVCmd.WRITE_4_BLOCKS,
+                icMfgCode || uid[6],
+                startBlock + i * 4,
+                ...dummy,
+                ...bytes16Blocks[i],
+              ],
+        );
+        // console.log('write 4 blocks success, response:', response); // success is [0]
+      }
+      // console.timeEnd('WRITE_4_BLOCKS');
+      //  4 bytes: 21.427979 ms
+      // 38 bytes: 72.591064 ms
     }
-    // if NFC tag hardware not supprt WRITE_MULTIPLE_BLOCKS , use above instead of below
-    // const response = await NfcManager.nfcVHandler.transceive(
-    //   isAddressed(cmdFlag)
-    //     ? [
-    //         cmdFlag,
-    //         nfcVCmd.WRITE_MULTIPLE_BLOCKS,
-    //         ...uid,
-    //         startBlock,
-    //         blocks.length,
-    //         ...dataToWrite,
-    //       ]
-    //     : [
-    //         cmdFlag,
-    //         nfcVCmd.WRITE_MULTIPLE_BLOCKS,
-    //         startBlock,
-    //         blocks.length,
-    //         ...dataToWrite,
-    //       ];
-    // );
 
     verifyRead = await readNfcVTagCanMultiple({
       uid,
