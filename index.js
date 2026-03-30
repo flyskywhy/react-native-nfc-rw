@@ -290,19 +290,39 @@ async function readNfcVTagCanMultiple({
     const sameLengthDummyBytes = new Array(bytesLength);
     const blocks = chunk(sameLengthDummyBytes, 4);
 
-    return (
-      await NfcManager.nfcVHandler.transceive(
-        isAddressed(cmdFlag)
-          ? [
-              cmdFlag,
-              nfcVCmd.READ_MULTIPLE_BLOCKS,
-              ...uid,
-              startBlock,
-              blocks.length,
-            ]
-          : [cmdFlag, nfcVCmd.READ_MULTIPLE_BLOCKS, startBlock, blocks.length],
-      )
-    ).slice(1, bytesLength + 1);
+    if (forceReadSingleBlock) {
+      // 使用多条单块读取命令循环读取
+      let bytesRead = [];
+      for (let i = 0; i < blocks.length; i++) {
+        const block = await NfcManager.nfcVHandler.transceive(
+          isAddressed(cmdFlag)
+            ? [cmdFlag, nfcVCmd.READ_SINGLE_BLOCK, ...uid, startBlock + i]
+            : [cmdFlag, nfcVCmd.READ_SINGLE_BLOCK, startBlock + i],
+        );
+        bytesRead.push(...block.slice(1, block.length + 1));
+      }
+
+      const lastBlockLength = bytesLength % 4;
+      if (lastBlockLength) {
+        bytesRead = bytesRead.slice(0, lastBlockLength - 4);
+      }
+
+      return bytesRead;
+    } else {
+      return (
+        await NfcManager.nfcVHandler.transceive(
+          isAddressed(cmdFlag)
+            ? [
+                cmdFlag,
+                nfcVCmd.READ_MULTIPLE_BLOCKS,
+                ...uid,
+                startBlock,
+                blocks.length,
+              ]
+            : [cmdFlag, nfcVCmd.READ_MULTIPLE_BLOCKS, startBlock, blocks.length],
+        )
+      ).slice(1, bytesLength + 1);
+    }
   } else {
     const sameLengthDummyBytes = new Array(bytesLength);
 
