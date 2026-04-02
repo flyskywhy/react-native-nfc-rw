@@ -30,6 +30,7 @@ import NfcManager, {NfcEvents, NfcTech, Ndef} from 'react-native-nfc-manager';
 const NFC_V_CMD_FLAG_BROADCAST = 0x02; // 广播
 const NFC_V_CMD_FLAG_ADDRESSED = 0x22; // 指定标签的 UID
 const NFC_V_CMD_FLAG_IS_ADDRESSED = 0x20;
+const NFC_V_CMD_FLAG_IS_ADDRESSED_CLEAR = 0xdf;
 
 function isAddressed(cmdFlag) {
   return (
@@ -228,22 +229,30 @@ async function readRegNfcVTag({
       await NfcManager.connect([NfcTech.NfcV]);
     }
 
-    if (tag && isAddressed(cmdFlag)) {
-      const uid = hexString2ByteArray(tag.id);
-      bytes = await NfcManager.nfcVHandler.transceive([
-        cmdFlag,
-        nfcVCmd.READ_REG,
-        icMfgCode || uid[6],
-        ...uid,
-        regAddress,
-      ]);
+    if (Platform.OS === 'ios') {
+      bytes = await NfcManager.iso15693HandlerIOS.customCommand({
+        flags: cmdFlag & NFC_V_CMD_FLAG_IS_ADDRESSED_CLEAR, // iOS not support addressed flag in custom command
+        customCommandCode: nfcVCmd.READ_REG,
+        customRequestParameters: [regAddress],
+      });
     } else {
-      bytes = await NfcManager.nfcVHandler.transceive([
-        cmdFlag,
-        nfcVCmd.READ_REG,
-        icMfgCode,
-        regAddress,
-      ]);
+      if (tag && isAddressed(cmdFlag)) {
+        const uid = hexString2ByteArray(tag.id);
+        bytes = await NfcManager.nfcVHandler.transceive([
+          cmdFlag,
+          nfcVCmd.READ_REG,
+          icMfgCode || uid[6],
+          ...uid,
+          regAddress,
+        ]);
+      } else {
+        bytes = await NfcManager.nfcVHandler.transceive([
+          cmdFlag,
+          nfcVCmd.READ_REG,
+          icMfgCode,
+          regAddress,
+        ]);
+      }
     }
 
     const response = bytes.shift();
@@ -319,7 +328,12 @@ async function readNfcVTagCanMultiple({
                 startBlock,
                 blocks.length,
               ]
-            : [cmdFlag, nfcVCmd.READ_MULTIPLE_BLOCKS, startBlock, blocks.length],
+            : [
+                cmdFlag,
+                nfcVCmd.READ_MULTIPLE_BLOCKS,
+                startBlock,
+                blocks.length,
+              ],
         )
       ).slice(1, bytesLength + 1);
     }
