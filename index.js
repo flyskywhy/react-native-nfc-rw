@@ -235,6 +235,7 @@ async function readRegNfcVTag({
         customCommandCode: nfcVCmd.READ_REG,
         customRequestParameters: [regAddress],
       });
+      return bytes; // 这里 return 了，后面的 finally 仍然会被执行的
     } else {
       if (tag && isAddressed(cmdFlag)) {
         const uid = hexString2ByteArray(tag.id);
@@ -253,14 +254,14 @@ async function readRegNfcVTag({
           regAddress,
         ]);
       }
-    }
 
-    const response = bytes.shift();
-    if (response) {
-      console.error('readRegNfcVTag error:', [response, ...bytes]);
-      return;
-    } else {
-      return bytes; // 这里 return 了，后面的 finally 仍然会被执行的
+      const response = bytes.shift();
+      if (response) {
+        console.error('readRegNfcVTag error:', [response, ...bytes]);
+        return;
+      } else {
+        return bytes; // 这里 return 了，后面的 finally 仍然会被执行的
+      }
     }
   } catch (error) {
     console.error('readRegNfcVTag failed:', error);
