@@ -33,6 +33,7 @@ import {
   initNfc,
   setSelectNfcVTag,
   readRegNfcVTag,
+  writeRegNfcVTag,
   readNfcVTag,
   writeNfcVTag,
 } from 'react-native-nfc-rw';

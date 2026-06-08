@@ -45,6 +45,7 @@ const nfcVCmd = {
   READ_MULTIPLE_BLOCKS: 0x23, // 读取多个块的数据
   WRITE_MULTIPLE_BLOCKS: 0x24, // 写入多个块的数据（需标签支持）
   SET_SELECT: 0x25, // 手机可以以此来表示霸占了 NFC 的读写，这样硬件管脚相连的固件就知道此时不能读写了，手机离开后能自动取消霸占的
+  WRITE_REG: 0xad, // 写入寄存器
   READ_REG: 0xae, // 读取寄存器
   WRITE_4_BLOCKS: 0xd6, // write 4 blocks (16 bytes), need tag support
 };
@@ -265,6 +266,75 @@ async function readRegNfcVTag({
     }
   } catch (error) {
     console.error('readRegNfcVTag failed:', error);
+  } finally {
+    if (Platform.OS === 'android') {
+      // 5. 释放 NFC 资源
+      NfcManager.cancelTechnologyRequest().catch(err => console.error(err));
+      // 如果想要能再次碰触后读取的，就要用上面，否则用下面的
+      // NfcManager.close();
+    }
+  }
+}
+
+// write a reg in NfcV Tag
+async function writeRegNfcVTag({
+  regAddress,
+  data,
+  tag,
+  cmdFlag = NFC_V_CMD_FLAG_ADDRESSED,
+  icMfgCode, // if not set, will be uid[6] automatically
+}) {
+  let bytes; // may return bytes of 4 regs start from regAddress
+
+  try {
+    if (Platform.OS === 'android') {
+      // NfcManager.requestTechnology(NfcTech.NfcV, {
+      //   alertMessage: '请将 NFC-V 标签靠近设备',
+      // });
+      // 我的 Android 手机上面的代码会导致第一次触碰会死等在这里，然后第二次触碰 NFC 才能读取数据，因此使用下面的代码
+      await NfcManager.connect([NfcTech.NfcV]);
+    }
+
+    if (Platform.OS === 'ios') {
+      bytes = await NfcManager.iso15693HandlerIOS.customCommand({
+        flags: cmdFlag & NFC_V_CMD_FLAG_IS_ADDRESSED_CLEAR, // iOS not support addressed flag in custom command
+        customCommandCode: nfcVCmd.WRITE_REG,
+        customRequestParameters: [regAddress, data.length - 1, ...data],
+      });
+      return bytes; // 这里 return 了，后面的 finally 仍然会被执行的
+    } else {
+      if (tag && isAddressed(cmdFlag)) {
+        const uid = hexString2ByteArray(tag.id);
+        bytes = await NfcManager.nfcVHandler.transceive([
+          cmdFlag,
+          nfcVCmd.WRITE_REG,
+          icMfgCode || uid[6],
+          ...uid,
+          regAddress,
+          data.length - 1,
+          ...data,
+        ]);
+      } else {
+        bytes = await NfcManager.nfcVHandler.transceive([
+          cmdFlag,
+          nfcVCmd.WRITE_REG,
+          icMfgCode,
+          regAddress,
+          data.length - 1,
+          ...data,
+        ]);
+      }
+
+      const response = bytes.shift();
+      if (response) {
+        console.error('writeRegNfcVTag error:', [response, ...bytes]);
+        return;
+      } else {
+        return bytes; // 这里 return 了，后面的 finally 仍然会被执行的
+      }
+    }
+  } catch (error) {
+    console.error('writeRegNfcVTag failed:', error);
   } finally {
     if (Platform.OS === 'android') {
       // 5. 释放 NFC 资源
@@ -766,6 +836,7 @@ export {
   destroyNfc,
   setSelectNfcVTag,
   readRegNfcVTag,
+  writeRegNfcVTag,
   readNfcVTagCanMultiple,
   readNfcVTag,
   writeNfcVTag,
